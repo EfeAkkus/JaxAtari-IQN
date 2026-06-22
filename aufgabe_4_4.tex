@@ -1,0 +1,53 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[german]{babel}
+\usepackage{amsmath}
+\usepackage{geometry}
+\geometry{a4paper, margin=2.54cm}
+
+\begin{document}
+
+\section*{Aufgabe 4.4}
+
+Der mittlere Fehler von $\langle x^2 \rangle$ und $\langle y^2 \rangle$ wird jeweils berechnet. Anschließend wird analysiert, wie sich dieser Fehler auf die Berechnung des Diffusionskoeffizienten $D$ und der Avogadro-Konstante $N_L$ auswirkt.
+
+Die Standardabweichung des Verschiebungsquadrats wird durch die folgende Formel berechnet:
+\begin{align*}
+\Delta \langle x^2 \rangle &= \sqrt{ \frac{1}{n-1} \sum_{i=1}^n (x_i^2 - \langle x^2 \rangle)^2 } \\
+\Delta \langle y^2 \rangle &= \sqrt{ \frac{1}{n-1} \sum_{i=1}^n (y_i^2 - \langle y^2 \rangle)^2 }
+\end{align*}
+
+Beispiel für das Teilchen bei $T = 25^\circ\text{C}$:
+\begin{align*}
+\Delta \langle x^2 \rangle_{25^\circ\text{C}} &= \sqrt{ \frac{1}{29-1} \sum_{i=1}^{29} (x_i^2 - 58.04 \, \mu\text{m}^2)^2 } = \dots \, \mu\text{m}^2 \\
+\Delta \langle y^2 \rangle_{25^\circ\text{C}} &= \sqrt{ \frac{1}{29-1} \sum_{i=1}^{29} (y_i^2 - 83.39 \, \mu\text{m}^2)^2 } = \dots \, \mu\text{m}^2
+\end{align*}
+
+Die Werte für das Teilchen bei $T = 35^\circ\text{C}$:
+\begin{align*}
+\Delta \langle x^2 \rangle_{35^\circ\text{C}} &= \sqrt{ \frac{1}{29-1} \sum_{i=1}^{29} (x_i^2 - 46.51 \, \mu\text{m}^2)^2 } = \dots \, \mu\text{m}^2 \\
+\Delta \langle y^2 \rangle_{35^\circ\text{C}} &= \sqrt{ \frac{1}{29-1} \sum_{i=1}^{29} (y_i^2 - 69.45 \, \mu\text{m}^2)^2 } = \dots \, \mu\text{m}^2
+\end{align*}
+
+Die Fehlerfortpflanzung für Diffusionskoeffizient $D$ und die Avogadrokonstante $N_L$ lässt sich nach Gauß bestimmen ($\Delta t$ wird als 2 Sekunden angenommen):
+\begin{align*}
+(\Delta D_x)_{25} &= \sqrt{ \left( \frac{\partial D_x}{\partial \langle x^2 \rangle} \right)^2 \Delta \langle x^2 \rangle^2 + \left( \frac{\partial D_x}{\partial t} \right)^2 \Delta t^2 } \\
+&= \sqrt{ \left( \frac{1}{2t} \right)^2 \Delta \langle x^2 \rangle^2 + \left( - \frac{\langle x^2 \rangle}{2t^2} \right)^2 \Delta t^2 } \\
+&= \sqrt{ \left( \frac{1}{2 \cdot t} \right)^2 (\Delta \langle x^2 \rangle_{25^\circ\text{C}} \cdot 10^{-12} \, \text{m}^2)^2 + \left( - \frac{58.04 \cdot 10^{-12} \, \text{m}^2}{2 \cdot t^2} \right)^2 (2 \, \text{s})^2 } \\
+&= \dots \, \text{m}^2/\text{s}
+\end{align*}
+
+Die Werte für $(\Delta D_y)_{25}$, $(\Delta D_x)_{35}$ und $(\Delta D_y)_{35}$ werden berechnet und in Tabelle 5 gezeigt.
+
+Die Fehlerfortpflanzung für $N_L$ wird auch nach Gauß bestimmt:
+\begin{align*}
+(\Delta N_{Lx})_{25} &= \sqrt{ \left( \frac{\partial N_{Lx}}{\partial T} \right)^2 (\Delta T)^2 + \left( \frac{\partial N_{Lx}}{\partial a_B} \right)^2 (\Delta a_B)^2 + \left( \frac{\partial N_{Lx}}{\partial D_x} \right)^2 (\Delta D_x)^2 } \\
+&= \sqrt{ \left( \frac{R}{6\pi\eta a_B D_x} \right)^2 (\Delta T)^2 + \left( - \frac{RT}{6\pi\eta a_B^2 D_x} \right)^2 (\Delta a_B)^2 + \left( - \frac{RT}{6\pi\eta a_B D_x^2} \right)^2 (\Delta D_x)^2 } \\
+&= \frac{R}{6\pi\eta a_B D_x} \sqrt{ (\Delta T)^2 + \left( - \frac{T}{a_B} \Delta a_B \right)^2 + \left( - \frac{T}{D_x} \Delta D_x \right)^2 } \\
+&= \frac{8.314 \, \frac{\text{J}}{\text{mol}\cdot\text{K}}}{6\pi \cdot 8.9\cdot 10^{-4} \, \text{Pa}\cdot\text{s} \cdot 2\cdot 10^{-6} \, \text{m} \cdot D_{x,25}} \times \\
+&\quad \sqrt{ (0.1 \, \text{K})^2 + \left( - \frac{298.15 \, \text{K}}{2\cdot 10^{-6} \, \text{m}} \cdot 8\cdot 10^{-8} \, \text{m} \right)^2 + \left( - \frac{298.15 \, \text{K}}{D_{x,25}} \cdot \Delta D_{x,25} \right)^2 } \\
+&= \dots \, \text{1/mol}
+\end{align*}
+
+\end{document}
