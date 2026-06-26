@@ -1,5 +1,4 @@
 # Adapted from agents/dqn/dqn.py — IQN (Implicit Quantile Networks) variant
-# Dabney et al., 2018: https://arxiv.org/abs/1806.06923
 import os
 import random
 import time
@@ -78,64 +77,47 @@ def make_env(env_id, mods=[], pixel_based=True, native_downscaling=True, eval=Fa
 
 
 class IQNCNNNetwork(nn.Module):
-    """IQN quantile network for pixel (RGB) observations.
-
-    Inputs:
-        x   — uint8 image, shape [B, C, H, W]
-        tau — quantile fractions in (0,1), shape [B, N_tau]
-    Output:
-        quantile values, shape [B, N_tau, action_dim]
-    """
     action_dim: int
     embedding_dim: int = 64
 
     @nn.compact
     def __call__(self, x, tau):
-        # CNN trunk — identical to DQN's QNetwork, minus the final action Dense
         x = jnp.transpose(x, (0, 2, 3, 1))
         x = x.astype(jnp.float32) / 255.0
         x = nn.relu(nn.Conv(32, kernel_size=(8, 8), strides=(4, 4), padding="VALID")(x))
         x = nn.relu(nn.Conv(64, kernel_size=(4, 4), strides=(2, 2), padding="VALID")(x))
         x = nn.relu(nn.Conv(64, kernel_size=(3, 3), strides=(1, 1), padding="VALID")(x))
         x = x.reshape((x.shape[0], -1))
-        psi = nn.relu(nn.Dense(512)(x))  # state embedding, [B, 512]
+        psi = nn.relu(nn.Dense(512)(x))
 
-        # Cosine quantile embedding: phi(tau) in R^{B x N x 512}
-        i = jnp.arange(1, self.embedding_dim + 1, dtype=jnp.float32)       # [n]
-        cos_feat = jnp.cos(jnp.pi * tau[:, :, None] * i[None, None, :])    # [B, N, n]
-        phi = nn.relu(nn.Dense(512)(cos_feat))                              # [B, N, 512]
 
-        # Hadamard merge and per-action quantile output
-        combined = psi[:, None, :] * phi                                    # [B, N, 512]
-        return nn.Dense(self.action_dim)(combined)                          # [B, N, action_dim]
+        i = jnp.arange(1, self.embedding_dim + 1, dtype=jnp.float32)
+        cos_feat = jnp.cos(jnp.pi * tau[:, :, None] * i[None, None, :])
+        phi = nn.relu(nn.Dense(512)(cos_feat))
+
+
+        combined = psi[:, None, :] * phi
+        return nn.Dense(self.action_dim)(combined)
 
 
 class IQNMLPNetwork(nn.Module):
-    """IQN quantile network for object-centric (OC) observations.
-
-    Inputs:
-        x   — float32 feature vector, shape [B, obs_dim]
-        tau — quantile fractions in (0,1), shape [B, N_tau]
-    Output:
-        quantile values, shape [B, N_tau, action_dim]
-    """
     action_dim: int
     embedding_dim: int = 64
 
     @nn.compact
     def __call__(self, x, tau):
-        # MLP trunk — identical to DQN's MLP_QNetwork, minus the final action Dense
+
         x = nn.relu(nn.Dense(461, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x))
-        psi = nn.relu(nn.Dense(512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x))  # [B, 512]
+        psi = nn.relu(nn.Dense(512, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x))
 
-        # Cosine quantile embedding: phi(tau) in R^{B x N x 512}
-        i = jnp.arange(1, self.embedding_dim + 1, dtype=jnp.float32)       # [n]
-        cos_feat = jnp.cos(jnp.pi * tau[:, :, None] * i[None, None, :])    # [B, N, n]
-        phi = nn.relu(nn.Dense(512)(cos_feat))                              # [B, N, 512]
 
-        # Hadamard merge and per-action quantile output
-        combined = psi[:, None, :] * phi                                    # [B, N, 512]
-        return nn.Dense(self.action_dim, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(combined)  # [B, N, action_dim]
+        i = jnp.arange(1, self.embedding_dim + 1, dtype=jnp.float32)
+        cos_feat = jnp.cos(jnp.pi * tau[:, :, None] * i[None, None, :])
+        phi = nn.relu(nn.Dense(512)(cos_feat))
+
+
+        combined = psi[:, None, :] * phi
+        return nn.Dense(self.action_dim, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(combined)
 
 
 class IQNTrainState(TrainState):
@@ -163,7 +145,7 @@ def build_eval_fn(env, apply_fn, eval_episodes, max_steps, action_dim, k_tau_sam
     def get_action(params, obs, key, epsilon):
         key, tau_key = jax.random.split(key)
         tau = jax.random.uniform(tau_key, (obs.shape[0], k_tau_samples))
-        q_values = jnp.mean(apply_fn(params, obs, tau), axis=1)  # [B, action_dim]
+        q_values = jnp.mean(apply_fn(params, obs, tau), axis=1)
         greedy_action = jnp.argmax(q_values, axis=1)
 
         key, subkey = jax.random.split(key)
@@ -216,7 +198,7 @@ def single_run(config: dict):
         save_code=True,
     )
 
-    # do not modify the seeding
+
     random.seed(config["SEED"])
     np.random.seed(config["SEED"])
     key = jax.random.PRNGKey(config["SEED"])
@@ -331,9 +313,9 @@ def single_run(config: dict):
             jnp.array([config.get("START_E", 1.0), config.get("END_E", 0.05)])
         )
 
-        # IQN action selection: average K quantile samples -> Q(s,a), then epsilon-greedy
+
         tau_act = jax.random.uniform(tau_act_rng, (config["NUM_ENVS"], config.get("K_TAU_SAMPLES", 32)))
-        q_values = jnp.mean(state.apply_fn(state.params, obs, tau_act), axis=1)  # [B, action_dim]
+        q_values = jnp.mean(state.apply_fn(state.params, obs, tau_act), axis=1)
         greedy_actions = q_values.argmax(axis=-1)
         random_actions = jax.random.randint(action_rng, (config["NUM_ENVS"],), 0, action_dim)
 
@@ -376,62 +358,62 @@ def single_run(config: dict):
 
             batch  = replay_buffer.sample(buffer_state, sample_key).experience
             b_obs  = batch["obs"]
-            b_act  = batch["action"].reshape(-1)   # [B] — .reshape(-1) handles [B] or [B,1]
-            b_rew  = batch["reward"]               # [B]
-            b_don  = batch["done"]                 # [B]
+            b_act  = batch["action"].reshape(-1)
+            b_rew  = batch["reward"]
+            b_don  = batch["done"]
             b_nobs = batch["next_obs"]
 
             def iqn_loss_fn(params):
-                # ── Online quantile fractions ─────────────────────────────────────
-                tau = jax.random.uniform(tau_key, (B, N))              # [B, N]
 
-                # ── Greedy next action: average K samples from target network ─────
-                tau_act = jax.random.uniform(tau_act_key, (B, K))     # [B, K]
+                tau = jax.random.uniform(tau_key, (B, N))
+
+
+                tau_act = jax.random.uniform(tau_act_key, (B, K))
                 next_q  = jnp.mean(
                     u_state.apply_fn(u_state.target_params, b_nobs, tau_act), axis=1
-                )                                                       # [B, action_dim]
-                next_action = jnp.argmax(next_q, axis=-1)              # [B]
+                )
+                next_action = jnp.argmax(next_q, axis=-1)
 
-                # ── Target quantiles at greedy next action ────────────────────────
-                tau_prime        = jax.random.uniform(tau_prime_key, (B, N_prime))   # [B, N']
+
+                tau_prime        = jax.random.uniform(tau_prime_key, (B, N_prime))
                 target_quantiles = u_state.apply_fn(
                     u_state.target_params, b_nobs, tau_prime
-                )                                                                      # [B, N', action_dim]
+                )
                 next_idx         = jnp.broadcast_to(next_action[:, None, None], (B, N_prime, 1))
                 target_at_action = jnp.take_along_axis(
                     target_quantiles, next_idx, axis=-1
-                ).squeeze(-1)                                                          # [B, N']
+                ).squeeze(-1)
 
-                # Bellman target (stop_gradient covers both next_action and target_quantiles)
+
                 T_theta = jax.lax.stop_gradient(
                     b_rew[:, None]
                     + (1.0 - b_don[:, None].astype(jnp.float32)) * gamma * target_at_action
-                )                                                                      # [B, N']
+                )
 
-                # ── Online quantiles at the taken action ──────────────────────────
-                online_quantiles = u_state.apply_fn(params, b_obs, tau)               # [B, N, action_dim]
+
+                online_quantiles = u_state.apply_fn(params, b_obs, tau)
                 act_idx  = jnp.broadcast_to(b_act[:, None, None], (B, N, 1))
                 theta_i  = jnp.take_along_axis(
                     online_quantiles, act_idx, axis=-1
-                ).squeeze(-1)                                                          # [B, N]
+                ).squeeze(-1)
 
-                # ── Pairwise TD errors ────────────────────────────────────────────
-                # delta[b,i,j] = T_theta[b,j] - theta_i[b,i]
-                delta = T_theta[:, None, :] - theta_i[:, :, None]                     # [B, N, N']
 
-                # ── Huber loss ────────────────────────────────────────────────────
+
+                delta = T_theta[:, None, :] - theta_i[:, :, None]
+
+
                 abs_delta = jnp.abs(delta)
                 huber = jnp.where(
                     abs_delta <= kappa,
                     0.5 * delta ** 2,
                     kappa * (abs_delta - 0.5 * kappa),
-                )                                                                      # [B, N, N']
+                )
 
-                # ── Quantile Huber weighting (online tau_i on the i/N axis) ───────
-                indicator = (delta < 0).astype(jnp.float32)                           # [B, N, N']
-                rho = jnp.abs(tau[:, :, None] - indicator) * huber / kappa            # [B, N, N']
 
-                # mean over N' (target/j), sum over N (online/i), mean over batch
+                indicator = (delta < 0).astype(jnp.float32)
+                rho = jnp.abs(tau[:, :, None] - indicator) * huber / kappa
+
+
                 loss = jnp.mean(jnp.sum(jnp.mean(rho, axis=-1), axis=-1))
 
                 return loss, theta_i
