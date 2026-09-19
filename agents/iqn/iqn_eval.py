@@ -8,7 +8,6 @@ import jax.numpy as jnp
 from jaxatari.environment import JaxEnvironment
 from jaxatari.wrappers import JaxatariWrapper
 
-
 def evaluate(
     model_path: str,
     make_env: Callable,
@@ -19,17 +18,20 @@ def evaluate(
     seed: int = 1,
     k_tau_samples: int = 32,
 ):
+
     env: JaxEnvironment | JaxatariWrapper = make_env(env_id)()
     _Network = Model
     key = jax.random.PRNGKey(seed)
 
     @jax.jit
     def wrapped_reset(key):
+        """wrappes the reset function of the environment to correct the observation shape"""
         next_obs, state = env.reset(key)
         return next_obs.squeeze()[None, ...], state
 
     @jax.jit
     def wrapped_step(state, action):
+        """wrappes the step function of the environment to correct the observation shape"""
         next_obs, next_state, reward, terminated, truncated, info = env.step(state, action.squeeze())
         done = jnp.logical_or(terminated, truncated)
         return next_obs.squeeze()[None, ...], next_state, reward, done, info
@@ -43,6 +45,7 @@ def evaluate(
     dummy_tau = jnp.zeros((1, k_tau_samples))
     q_params = network.init(network_key, dummy_obs, dummy_tau)
 
+
     with open(model_path, "rb") as f:
         (args, q_params) = flax.serialization.from_bytes((None, q_params), f.read())
 
@@ -50,8 +53,9 @@ def evaluate(
     def get_action(q_params: flax.core.FrozenDict, next_obs: jnp.ndarray, key: jax.random.PRNGKey):
         key, tau_key = jax.random.split(key)
         tau = jax.random.uniform(tau_key, (next_obs.shape[0], k_tau_samples))
-        q_values = jnp.mean(network.apply(q_params, next_obs, tau), axis=1)  # [B, action_dim]
+        q_values = jnp.mean(network.apply(q_params, next_obs, tau), axis=1)
         greedy_action = jnp.argmax(q_values, axis=1)
+
 
         key, subkey = jax.random.split(key)
         random_action = jax.random.randint(subkey, greedy_action.shape, 0, env.action_space().n)
