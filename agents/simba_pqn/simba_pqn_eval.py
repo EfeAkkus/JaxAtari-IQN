@@ -1,15 +1,4 @@
-"""Evaluation for SimBa-PQN.
 
-Identical to agents/pqn/pqn_eval.py -- evaluation logic, seeding, greedy action
-selection, episode handling and metrics are unchanged. The only difference is
-which network class the caller passes in as `Model`; simba_pqn.py passes a
-functools.partial of the SimBa Q-network with its architecture hyperparameters
-already bound, so `Model(action_dim=...)` below rebuilds the training network exactly.
-
-The evaluation epsilon (0.05, the default of the `epsilon` argument below) is
-inherited from PQN deliberately, so that PQN and SimBa-PQN are evaluated
-under identical conditions.
-"""
 from typing import Callable
 
 import flax
