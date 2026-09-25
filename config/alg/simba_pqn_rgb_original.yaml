@@ -1,0 +1,32 @@
+# SimBa-PQN: the original PQN training hyperparameters combined with the SimBa
+# residual network architecture. Training hyperparameters below are unchanged
+# from config/alg/pqn_rgb_original.yaml.
+ALG: SIMBA_PQN
+EXP_NAME: simba_pqn
+
+PIXEL_BASED: True
+NATIVE_DOWNSCALING: True
+
+TOTAL_TIMESTEPS: 10000000
+NUM_STEPS: 128
+SCAN_STEPS: 1000
+
+NUM_ENVS: 8
+LEARNING_RATE: 2.5e-4
+NUM_MINIBATCHES: 4
+UPDATE_EPOCHS: 4
+GAMMA: 0.99
+Q_LAMBDA: 0.65
+MAX_GRAD_NORM: 10.0
+ANNEAL_LR: True
+START_E: 1.0
+END_E: 0.01
+EXPLORATION_FRACTION: 0.10
+
+# SimBa architecture (Lee et al., ICLR 2025). Values taken from the critic in the
+# official SimBa release; NOT independently tuned for PQN or for JAXAtari.
+# RSNorm is intentionally omitted -- observation preprocessing matches the PQN
+# baseline. See the scope note at the top of agents/simba_pqn/simba_pqn.py.
+SIMBA_HIDDEN_DIM: 512
+SIMBA_NUM_BLOCKS: 2
+SIMBA_EXPANSION_FACTOR: 4
