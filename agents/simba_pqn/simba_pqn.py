@@ -1,30 +1,4 @@
-# PQN + SimBa: the PQN algorithm (adapted from https://github.com/mttga/purejaxql)
-# with its Q-network replaced by the SimBa architecture.
-#
-# SimBa: Simplicity Bias for Scaling Up Parameters in Deep Reinforcement Learning
-# (Lee et al., ICLR 2025) -- https://arxiv.org/abs/2410.09754
-# Official implementation: https://github.com/SonyResearch/simba
-#
-# This file is a copy of agents/pqn/pqn.py; the ONLY differences are the network
-# definitions below and the three lines that construct and hand them to evaluate().
-# The learning rule (Q(lambda) targets, epsilon-greedy rollout, epoch/minibatch
-# updates, optimiser, scan/JIT structure) is unchanged.
-#
-# SCOPE / DELIBERATE DEVIATION FROM THE ORIGINAL SimBa SETUP
-# ----------------------------------------------------------
-# The original SimBa method has three components: (i) running-statistics
-# observation normalisation (RSNorm), (ii) the residual feedforward block, and
-# (iii) a final layer normalisation. This agent implements (ii) and (iii) only.
-#
-# RSNorm is intentionally NOT implemented. Observation preprocessing is kept
-# identical to the PQN baseline -- NormalizeObservationWrapper for
-# object-centric observations, and the standard Atari pixel pipeline (uint8,
-# /255, frame stacking) feeding PQN's CNN encoder for RGB -- so that the only
-# difference between PQN and SimBa-PQN is the network architecture.
-#
-# This agent should therefore be described as "PQN with the SimBa residual
-# network architecture", NOT as a faithful reproduction of the complete
-# original SimBa training setup.
+
 import os
 import random
 import time
@@ -99,14 +73,6 @@ def make_env(env_id, mods=[], pixel_based=True, native_downscaling=True, eval=Fa
     return thunk
 
 class SimBaResidualBlock(nn.Module):
-    """SimBa pre-LayerNorm inverted-bottleneck residual block.
-
-    Mirrors ResidualBlock in scale_rl/networks/layers.py of the official SimBa
-    implementation: LayerNorm -> Dense(d * expansion) -> ReLU -> Dense(d) -> skip add.
-    The residual path gives a linear route from input to output (the "simplicity
-    bias"), while the pre-LayerNorm keeps activations bounded as depth grows.
-    He-normal init on the two Dense layers follows the official code.
-    """
 
     hidden_dim: int
     expansion_factor: int = 4
@@ -122,13 +88,7 @@ class SimBaResidualBlock(nn.Module):
 
 
 class SimBaTail(nn.Module):
-    """SimBa encoder + Q-head: Dense(d) -> N residual blocks -> LayerNorm -> Dense(num_actions).
 
-    Replaces the plain MLP head PQN used after its modality-specific encoder.
-    The trailing LayerNorm matches the official SimBa encoder and preserves the
-    property PQN relies on to train without a target network: the features
-    reaching the Q-head are always normalised.
-    """
 
     action_dim: int
     hidden_dim: int
@@ -138,8 +98,7 @@ class SimBaTail(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = nn.Dense(self.hidden_dim, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(x)
-        # Static Python loop: num_blocks is fixed at module-construction time, so
-        # this unrolls at trace time and stays JIT-safe.
+
         for _ in range(self.num_blocks):
             x = SimBaResidualBlock(self.hidden_dim, self.expansion_factor)(x)
         x = nn.LayerNorm()(x)
@@ -147,16 +106,7 @@ class SimBaTail(nn.Module):
 
 
 class SimBaQNetwork(nn.Module):
-    """RGB Q-network: PQN's CNN encoder unchanged, followed by the SimBa tail.
 
-    Pixel preprocessing (uint8 -> float32, /255, NCHW -> NHWC) and the three
-    conv layers are byte-identical to PQN's QNetwork, and SimBa is applied to
-    the CNN latent rather than to raw pixels.
-
-    Deliberate deviation: the original SimBa applies RSNorm to the observation.
-    Here PQN's existing pixel preprocessing is kept unchanged instead. See the
-    scope note at the top of this file.
-    """
 
     action_dim: int
     hidden_dim: int = 512
@@ -178,24 +128,13 @@ class SimBaQNetwork(nn.Module):
         x = nn.LayerNorm()(x)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))
-        # PQN had Dense(512) + LayerNorm + ReLU -> Dense(action_dim) here; the
-        # SimBa tail's projection takes over the role of that Dense(512).
+
         x = SimBaTail(self.action_dim, self.hidden_dim, self.num_blocks, self.expansion_factor)(x)
         return x
 
 
 class SimBaMLP_QNetwork(nn.Module):
-    """Object-centric Q-network: the SimBa tail applied directly to the observation.
 
-    Replaces PQN's Dense(461) + Dense(512) MLP.
-
-    Deliberate deviation: the original SimBa applies RSNorm to the observation.
-    Here PQN's existing normalisation is kept instead -- NormalizeObservationWrapper
-    (see make_env) maps object-centric observations to [0, 1] using the
-    environment's declared observation-space bounds -- so that observation
-    preprocessing is identical for PQN and SimBa-PQN. See the scope note at the
-    top of this file.
-    """
 
     action_dim: int
     hidden_dim: int = 512
@@ -283,15 +222,13 @@ def single_run(config: dict):
     num_iterations = total_timesteps // batch_size
     exploration_steps = exploration_fraction * total_timesteps
 
-    # SimBa architecture hyperparameters; defaults match the critic used in the
-    # official SimBa release (hidden 512, 2 blocks, expansion 4).
+
     simba_hidden_dim = config.get("SIMBA_HIDDEN_DIM", 512)
     simba_num_blocks = config.get("SIMBA_NUM_BLOCKS", 2)
     simba_expansion_factor = config.get("SIMBA_EXPANSION_FACTOR", 4)
 
     key, q_key = jax.random.split(key, 2)
-    # Bind the SimBa hyperparameters once so training and evaluation build an
-    # identical parameter tree (evaluate() instantiates this as Model(action_dim=...)).
+    .
     Network = partial(
         SimBaQNetwork if config.get("PIXEL_BASED", True) else SimBaMLP_QNetwork,
         hidden_dim=simba_hidden_dim,
@@ -323,28 +260,28 @@ def single_run(config: dict):
         def step_once(carry, _):
             q_params, env_state, last_obs, last_done, key, global_step = carry
 
-            #eps greedy
+
             epsilon = jnp.maximum(
                 end_e,
                 start_e + (end_e - start_e) * global_step.astype(jnp.float32) / exploration_steps,
             )
 
-            #forward pass values for qlambda
+
             q_vals = network.apply(q_params, last_obs)
             max_actions = jnp.argmax(q_vals, axis=-1)
             max_vals = q_vals[jnp.arange(num_envs), max_actions]
 
-            #action selection
+
             key, act_key, exp_key = jax.random.split(key, 3)
             rnd = jax.random.randint(act_key, (num_envs,), 0, action_dim)
             explore = jax.random.uniform(exp_key, (num_envs,)) < epsilon
             actions = jnp.where(explore, rnd, max_actions)
 
-            #vectorized one step of all envs
+
             next_obs, new_states, rewards, next_done, info = vmap_step(env_state, actions)
             done = next_done.astype(jnp.float32)
 
-            #store
+
             storage = Storage(
                 obs=last_obs, actions=actions, rewards=rewards,
                 dones=last_done, values=max_vals,
@@ -352,7 +289,7 @@ def single_run(config: dict):
             )
             new_carry = (q_params, new_states, next_obs, done, key, global_step + num_envs)
             return new_carry, (storage, info)
-        #rollout loop, stack all stored values for each step
+
         (q_params, env_state, next_obs, next_done, rng, global_step), (storage, infos) = jax.lax.scan(
             step_once,
             (q_state.params, env_state, obs, last_done, rng, global_step),
@@ -360,7 +297,7 @@ def single_run(config: dict):
             length=num_steps,
         )
 
-        # recursive q lamda update
+
         def compute_q_lambda_once(carry, inp):
             next_return = carry
             reward, next_val, nd = inp
@@ -373,9 +310,9 @@ def single_run(config: dict):
         next_dones_t = jnp.concatenate([storage.dones[1:], next_done[None]], axis=0)
         _, returns = jax.lax.scan(
             compute_q_lambda_once, next_val,
-            (storage.rewards, next_values_t, next_dones_t), reverse=True, #backward through time iteration
+            (storage.rewards, next_values_t, next_dones_t), reverse=True,
         )
-        storage = storage.replace(returns=returns) #multi step storage ready for gradient updates
+        storage = storage.replace(returns=returns)
 
         def update_epoch(carry, _):
             q_state, key = carry
@@ -384,14 +321,14 @@ def single_run(config: dict):
             def flatten(x):
                 return x.reshape((-1,) + x.shape[2:])
 
-            def convert_data(x): #turn into shuffled batches
+            def convert_data(x):
                 x = jax.random.permutation(subkey, x)
                 return jnp.reshape(x, (num_minibatches, -1) + x.shape[1:])
 
             flat = jax.tree_util.tree_map(flatten, storage)
             shuffled = jax.tree_util.tree_map(convert_data, flat)
 
-            def update_minibatch(q_state, mb): #mb gradient descent
+            def update_minibatch(q_state, mb):
                 def loss_fn(params):
                     q_vals = network.apply(params, mb.obs)
                     q_sel = q_vals[jnp.arange(minibatch_size), mb.actions]
@@ -400,10 +337,10 @@ def single_run(config: dict):
                 q_state = q_state.apply_gradients(grads=grads)
                 return q_state, (loss, q_val)
 
-            q_state, (loss, q_val) = jax.lax.scan(update_minibatch, q_state, shuffled) #iterate mbgd updates in one epoch
+            q_state, (loss, q_val) = jax.lax.scan(update_minibatch, q_state, shuffled)
             return (q_state, key), (loss, q_val)
 
-        (q_state, rng), (loss, q_val) = jax.lax.scan(update_epoch, (q_state, rng), (), length=update_epochs) #run for #update epochs training
+        (q_state, rng), (loss, q_val) = jax.lax.scan(update_epoch, (q_state, rng), (), length=update_epochs)
 
         return (q_state, env_state, next_obs, next_done, rng, global_step), (infos, loss[-1, -1], q_val[-1, -1])
 
@@ -424,7 +361,7 @@ def single_run(config: dict):
 
         print(f"running evaluation at step {step_count}...")
 
-        # evaluate across all mods (and default train env)
+
         eval_mods = config["EVAL_MODS"] if len(config["EVAL_MODS"]) > 0 else config["TRAIN_MODS"]
         eval_configs = [([], "default")]
         if len(eval_mods) > 0:
@@ -448,16 +385,16 @@ def single_run(config: dict):
                 config["ENV_ID"],
                 eval_episodes=10,
                 Model=Network,
-                seed=config["SEED"]+42, # use a different seed for evaluation
+                seed=config["SEED"]+42,
             )
             metrics[mod_label] = np.mean(jax.device_get(episodic_returns))
             wandb.log({f"eval/episodic_return_{mod_label}": np.mean(jax.device_get(episodic_returns))}, step=step_count)
 
             if config["CAPTURE_VIDEO"]:
-                # Instantiate a clean renderer immune to the training env's downscaling
+
                 clean_renderer = jaxatari.make(config["ENV_ID"], mods=mods_cfg).renderer
                 frames = jax.vmap(clean_renderer.render)(env_states)
-                # shape: (N, H, W, C) -> (N, C, H, W)
+
                 frames = jnp.transpose(frames, (0, 3, 1, 2))
                 video = wandb.Video(np.array(frames), fps=30, format="mp4")
                 wandb.log(
