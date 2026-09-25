@@ -1,0 +1,39 @@
+# SimBa-SAC: the original SAC training hyperparameters combined with the SimBa
+# residual network architecture. Training hyperparameters below are unchanged from
+# the reference sac_oc_original.yaml (MertUyar/jaxtari_model_free).
+ALG: SIMBA_SAC
+EXP_NAME: simba_sac
+
+PIXEL_BASED: False
+NATIVE_DOWNSCALING: True
+
+LEARNING_RATE: 0.0003
+GAMMA: 0.99
+TAU: 1.0
+BATCH_SIZE: 64
+BUFFER_SIZE: 1000000
+LEARNING_STARTS: 20000
+TRAIN_FREQUENCY: 4
+GRADIENT_STEPS: 1
+TARGET_UPDATE_FREQUENCY: 8000
+
+AUTOTUNE: True
+TARGET_ENTROPY_SCALE: 0.89
+ALPHA: 0.2
+
+SCAN_STEPS: 1000
+NUM_ENVS: 1
+TOTAL_TIMESTEPS: 10000000
+
+# SimBa architecture (Lee et al., ICLR 2025). Actor and critic are asymmetric,
+# taken verbatim from the official SimBa SAC release (configs/agent/sac_simba.yaml):
+# actor 128 wide / 1 residual block, critic 512 wide / 2 blocks, 4x inverted
+# bottleneck. These are the paper's values, NOT independently tuned for discrete
+# SAC or for JAXAtari.
+# RSNorm is intentionally omitted -- observation preprocessing matches the SAC
+# baseline. See the scope note at the top of agents/simba_sac/simba_sac.py.
+SIMBA_ACTOR_HIDDEN_DIM: 128
+SIMBA_ACTOR_NUM_BLOCKS: 1
+SIMBA_CRITIC_HIDDEN_DIM: 512
+SIMBA_CRITIC_NUM_BLOCKS: 2
+SIMBA_EXPANSION_FACTOR: 4
