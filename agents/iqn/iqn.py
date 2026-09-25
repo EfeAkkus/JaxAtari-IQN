@@ -1,5 +1,6 @@
 import os
 import random
+import tempfile
 import time
 from functools import partial
 import flax
@@ -21,8 +22,8 @@ from jaxatari.wrappers import (
     LogWrapper,
     FlattenObservationWrapper,
 )
+from agents.iqn.iqn_eval import evaluate
 from rtpt import RTPT
-
 
 def make_env(env_id, mods=[], pixel_based=True, native_downscaling=True, eval=False):
     assert mods is None or isinstance(mods, list), "mods must be None or a list of strings"
@@ -114,56 +115,7 @@ class MLP_QNetwork(nn.Module):
         return x
 
 class IQNTrainState(TrainState):
-    target_params: flax.core.FrozenDict 
-
-def build_eval_fn(env, apply_fn, eval_episodes, max_steps, action_dim, k_tau_samples):
-
-    def wrapped_reset(key):
-        next_obs, state = env.reset(key)
-        return next_obs.squeeze()[None, ...], state
-
-    def wrapped_step(state, action):
-        next_obs, next_state, reward, terminated, truncated, info = env.step(state, action.squeeze())
-        done = jnp.logical_or(terminated, truncated)
-        return next_obs.squeeze()[None, ...], next_state, reward, done, info
-
-    def get_action(params, obs, key, epsilon):
-        key, tau_key = jax.random.split(key)
-        tau = jax.random.uniform(tau_key, (obs.shape[0], k_tau_samples))
-        q_values = jnp.mean(apply_fn(params, obs, tau), axis=1)
-        greedy_action = jnp.argmax(q_values, axis=1)
-
-        key, subkey = jax.random.split(key)
-        random_action = jax.random.randint(subkey, greedy_action.shape, 0, action_dim)
-        explore = jax.random.uniform(key, greedy_action.shape) < epsilon
-        action = jnp.where(explore, random_action, greedy_action)
-        return action, key
-
-    def step_fn(carry, _):
-        obs, env_state, keys, params, epsilon = carry
-
-        actions, keys = jax.vmap(get_action, in_axes=(None, 0, 0, None))(params, obs, keys, epsilon)
-        next_obs, next_env_state, reward, done, info = jax.vmap(wrapped_step)(env_state, actions)
-        first_state = jax.tree.map(lambda x: x[0], next_env_state)
-
-        return (next_obs, next_env_state, keys, params, epsilon), (first_state, done, reward)
-
-    @jax.jit
-    def eval_fn(params, reset_keys, epsilon):
-        obs, env_state = jax.vmap(wrapped_reset)(reset_keys)
-
-        _, (first_states_history, dones, rewards) = jax.lax.scan(
-            step_fn, (obs, env_state, reset_keys, params, epsilon), None, length=max_steps)
-        has_finished = jax.lax.cummax(dones.astype(jnp.int32), axis=0)
-        mask_after_first_done = jnp.pad(has_finished[:-1, :], ((1, 0), (0, 0)), constant_values=0)
-        masked_rewards = rewards * (1 - mask_after_first_done)
-        episodic_returns = jnp.sum(masked_rewards, axis=0)
-
-        first_done = jnp.argmax(dones, axis=0)
-        return episodic_returns, first_states_history, first_done
-
-    return eval_fn
-
+    target_params: flax.core.FrozenDict
 
 def single_run(config: dict):
     config = {k.upper(): v for k, v in config.items() if k != "alg"}
@@ -258,25 +210,6 @@ def single_run(config: dict):
         eval_configs.append((mods_cfg, mod_label))
 
     eval_episodes = 10
-    eval_max_steps = 10000
-
-    eval_fns = {}
-    for mods_cfg, mod_label in eval_configs:
-        eval_env = make_env(
-            config["ENV_ID"],
-            mods=mods_cfg,
-            pixel_based=config.get("PIXEL_BASED", True),
-            native_downscaling=config.get("NATIVE_DOWNSCALING", True),
-            eval=True,
-        )()
-        eval_fns[mod_label] = build_eval_fn(
-            env=eval_env,
-            apply_fn=network.apply,
-            eval_episodes=eval_episodes,
-            max_steps=eval_max_steps,
-            action_dim=action_dim,
-            k_tau_samples=config.get("K_TAU_SAMPLES", 32),
-        )
 
     def step_once(carry, _):
         state, buffer_state, env_state, obs, rng, global_step = carry
@@ -411,7 +344,6 @@ def single_run(config: dict):
 
     def save_and_eval(step_count):
         agent_state = iqn_carry[0]
-        model_path = ""
         if config.get("SAVE_PATH", "./models") is not None:
             model_path = f'{config.get("SAVE_PATH", "./models")}/{run_name}/{config["EXP_NAME"]}_{step_count}_{int(time.time())}.cleanrl_model'
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
@@ -422,15 +354,33 @@ def single_run(config: dict):
                     )
                 )
             print(f"model saved to {model_path}")
+        else:
+            # evaluate() restores the parameters from a checkpoint file, so without a
+            # SAVE_PATH write a temporary one for it; it is removed after evaluation.
+            fd, model_path = tempfile.mkstemp(suffix=".cleanrl_model")
+            with os.fdopen(fd, "wb") as f:
+                f.write(flax.serialization.to_bytes((None, agent_state.params)))
 
         print(f"running evaluation at step {step_count}...")
 
         metrics = {}
         for mods_cfg, mod_label in eval_configs:
-            reset_keys = jax.random.split(jax.random.PRNGKey(config["SEED"]), eval_episodes)
-
-            episodic_returns, first_states_history, first_done = eval_fns[mod_label](
-                agent_state.params, reset_keys, 0.05
+            episodic_returns, env_states_until_done = evaluate(
+                model_path,
+                partial(
+                    make_env,
+                    mods=mods_cfg,
+                    pixel_based=config.get("PIXEL_BASED", True),
+                    native_downscaling=config.get("NATIVE_DOWNSCALING", True),
+                    eval=True,
+                ),
+                config["ENV_ID"],
+                eval_episodes=eval_episodes,
+                # bind embedding_dim so evaluate() rebuilds the same parameter tree as training
+                Model=partial(QNetwork if config.get("PIXEL_BASED", True) else MLP_QNetwork, embedding_dim=embedding_dim),
+                epsilon=0.05,
+                seed=config["SEED"],
+                k_tau_samples=config.get("K_TAU_SAMPLES", 32),
             )
 
             avg_eval_return = float(jnp.mean(episodic_returns))
@@ -443,10 +393,6 @@ def single_run(config: dict):
             if config.get("CAPTURE_VIDEO", False):
                 # Instantiate a clean renderer immune to the training env's downscaling
                 clean_renderer = jaxatari.make(config["ENV_ID"], mods=mods_cfg).renderer
-                env_states_until_done = jax.tree.map(
-                    lambda x: x[: first_done[0] + 1],
-                    first_states_history.atari_state.atari_state.env_state,
-                )
                 frames = jax.vmap(clean_renderer.render)(env_states_until_done)
                 # shape: (N, H, W, C) -> (N, C, H, W)
                 frames = jnp.transpose(frames, (0, 3, 1, 2))
@@ -454,6 +400,9 @@ def single_run(config: dict):
                 video_key = f"eval/video_{mod_label}"
                 wandb.log({video_key: video}, step=step_count)
                 print(f"video (eval) logged to wandb with {frames.shape} frames ({mod_label}).")
+
+        if config.get("SAVE_PATH", "./models") is None:
+            os.remove(model_path)
         return metrics
 
     # we step n_envs each iteration
