@@ -228,7 +228,6 @@ def single_run(config: dict):
     simba_expansion_factor = config.get("SIMBA_EXPANSION_FACTOR", 4)
 
     key, q_key = jax.random.split(key, 2)
-    .
     Network = partial(
         SimBaQNetwork if config.get("PIXEL_BASED", True) else SimBaMLP_QNetwork,
         hidden_dim=simba_hidden_dim,
