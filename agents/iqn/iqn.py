@@ -177,7 +177,7 @@ def single_run(config: dict):
     dummy_tau = jnp.zeros((1, config.get("K_TAU_SAMPLES", 32)))
     q_params = network.init(q_key, dummy_obs, dummy_tau)
 
-    tx = optax.adam(learning_rate=config.get("LEARNING_RATE", 0.0001), eps=1e-4)
+    tx = optax.adam(learning_rate=config.get("LEARNING_RATE", 0.0001), eps=config.get("ADAM_EPS", 1e-4))
 
     agent_state = IQNTrainState.create(
         apply_fn=network.apply,
