@@ -1,42 +1,3 @@
-# SAC + SimBa: discrete SAC, adapted from the JAXAtari SAC implementation in
-# https://github.com/MertUyar/jaxtari_model_free (agents/sac/sac.py), with the
-# hidden MLP of every actor/critic replaced by SimBa residual blocks.
-#
-# SimBa: Simplicity Bias for Scaling Up Parameters in Deep Reinforcement Learning
-# (Lee et al., ICLR 2025) -- https://arxiv.org/abs/2410.09754
-#
-# Following the official SimBa release, the actor and critic are asymmetric:
-# the actor is 128 wide with 1 residual block and the critic is 512 wide with
-# 2 blocks (configs/agent/sac_simba.yaml), both with a 4x inverted bottleneck.
-#
-# This file mirrors the reference sac.py; the ONLY differences are the network
-# definitions below, the lines that construct them and hand them to evaluate(),
-# and read-only training diagnostics (alpha, policy entropy, max |Q|).
-#
-# The SAC algorithm itself -- replay buffer, target-Q with the entropy term, the
-# joint two-critic loss, the actor loss against the updated critics, the
-# autotuned temperature, update ordering, target-network cadence and action
-# selection -- is unchanged.
-#
-# One inherited bug is fixed: the reference derives the environment-reset keys
-# and the training rng from the same PRNG key, so env 0's reset key is
-# byte-identical to the first rollout key. See the `reset_key` split below. This
-# changes seeding, so runs are no longer bit-comparable to the unpatched
-# reference; every other inherited behaviour is preserved deliberately.
-#
-# SCOPE / DELIBERATE DEVIATION FROM THE ORIGINAL SimBa SETUP
-# ----------------------------------------------------------
-# The original SimBa method has three components: (i) running-statistics
-# observation normalisation (RSNorm), (ii) the residual feedforward block, and
-# (iii) a final layer normalisation. This agent implements (ii) and (iii) only.
-#
-# RSNorm is intentionally NOT implemented. Observation preprocessing is kept
-# identical to the SAC baseline -- NormalizeObservationWrapper for
-# object-centric observations, and the standard Atari pixel pipeline (uint8,
-# /255, frame stacking) feeding the reference CNN encoder for RGB.
-#
-# This agent should therefore be described as "SAC with the SimBa residual
-# network architecture", NOT as a reproduction of the full original SimBa setup.
 import os
 import random
 import time
@@ -111,15 +72,7 @@ def make_env(env_id, mods=[], pixel_based=True, native_downscaling=True, eval=Fa
     return thunk
 
 
-
 class SimBaResidualBlock(nn.Module):
-    """SimBa pre-LayerNorm inverted-bottleneck residual block.
-
-    LayerNorm -> Dense(d * expansion) -> ReLU -> Dense(d) -> skip add. The
-    residual path gives a linear route from input to output (the "simplicity
-    bias") while the pre-LayerNorm keeps activations bounded as depth grows.
-    """
-
     hidden_dim: int
     expansion_factor: int = 4
 
@@ -134,15 +87,6 @@ class SimBaResidualBlock(nn.Module):
 
 
 class SimBaTrunk(nn.Module):
-    """Dense(d) -> N residual blocks -> LayerNorm.
-
-    This is the only part that replaces reference SAC architecture: it stands in
-    for the hidden MLP (Dense(512)+ReLU for pixels, Dense(256)+ReLU twice for
-    object-centric). It deliberately does NOT include an output head -- each
-    actor/critic below keeps its own reference head line verbatim, so the SAC
-    output semantics are unchanged.
-    """
-
     hidden_dim: int
     num_blocks: int
     expansion_factor: int
@@ -150,8 +94,6 @@ class SimBaTrunk(nn.Module):
     @nn.compact
     def __call__(self, x):
         x = nn.Dense(self.hidden_dim, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(x)
-        # Static Python loop: num_blocks is fixed at module-construction time,
-        # so this unrolls at trace time and stays JIT-safe.
         for _ in range(self.num_blocks):
             x = SimBaResidualBlock(self.hidden_dim, self.expansion_factor)(x)
         return nn.LayerNorm()(x)
@@ -159,7 +101,6 @@ class SimBaTrunk(nn.Module):
 
 class SimBa_Pixel_Actor_Discrete(nn.Module):
     action_dim: int
-    # Official SimBa SAC actor: 128 wide, 1 residual block (configs/agent/sac_simba.yaml).
     hidden_dim: int = 128
     num_blocks: int = 1
     expansion_factor: int = 4
@@ -175,7 +116,6 @@ class SimBa_Pixel_Actor_Discrete(nn.Module):
         x = nn.Conv(64, kernel_size=(3, 3), strides=(1, 1), padding="VALID", kernel_init=nn.initializers.he_normal(), bias_init=constant(0.0))(x)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))
-        # SimBa replaces the reference's Dense(512) + ReLU hidden layer.
         x = SimBaTrunk(self.hidden_dim, self.num_blocks, self.expansion_factor)(x)
         x = nn.Dense(self.action_dim, kernel_init=nn.initializers.he_normal(), bias_init=constant(0.0))(x)
         sample = jax.random.categorical(key, x)
@@ -200,7 +140,6 @@ class SimBa_Pixel_Critic(nn.Module):
         x = nn.Conv(64, kernel_size=(3, 3), strides=(1, 1), padding="VALID", kernel_init=nn.initializers.he_normal(), bias_init=constant(0.0))(x)
         x = nn.relu(x)
         x = x.reshape((x.shape[0], -1))
-        # SimBa replaces the reference's Dense(512) + ReLU hidden layer.
         x = SimBaTrunk(self.hidden_dim, self.num_blocks, self.expansion_factor)(x)
         x = nn.Dense(self.action_dim, kernel_init=nn.initializers.he_normal(), bias_init=constant(0.0))(x)
         return x
@@ -208,16 +147,12 @@ class SimBa_Pixel_Critic(nn.Module):
 
 class SimBa_MLP_Actor_Discrete(nn.Module):
     action_dim: int
-    # Official SimBa SAC actor: 128 wide, 1 residual block (configs/agent/sac_simba.yaml).
     hidden_dim: int = 128
     num_blocks: int = 1
     expansion_factor: int = 4
 
     @nn.compact
     def __call__(self, x, key):
-        # SimBa replaces the reference's two Dense(256) + ReLU hidden layers.
-        # Object-centric observations arrive already normalised to [0, 1] by
-        # NormalizeObservationWrapper (see make_env), so no RSNorm is applied.
         x = SimBaTrunk(self.hidden_dim, self.num_blocks, self.expansion_factor)(x)
         x = nn.Dense(self.action_dim, kernel_init=nn.initializers.he_normal(), bias_init=constant(0.0))(x)
         sample = jax.random.categorical(key, x)
@@ -233,7 +168,6 @@ class SimBa_MLP_Critic(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        # SimBa replaces the reference's two Dense(256) + ReLU hidden layers.
         x = SimBaTrunk(self.hidden_dim, self.num_blocks, self.expansion_factor)(x)
         x = nn.Dense(self.action_dim, kernel_init=nn.initializers.he_normal(), bias_init=constant(0.0))(x)
         return x
@@ -290,7 +224,6 @@ def single_run(config: dict):
         obs_shape = obs_shape[:-1]
 
     num_envs = config["NUM_ENVS"]
-    # if -1: we do as many gradient steps as collected samples (stable_baselines3 behavior)
     gradient_steps = num_envs * config.get("TRAIN_FREQUENCY", 4) if config.get("GRADIENT_STEPS", 1) == -1 else config.get("GRADIENT_STEPS", 1) 
 
     @jax.jit
@@ -313,12 +246,6 @@ def single_run(config: dict):
 
     key, actor_key, actor_key2, qf1_key, qf2_key = jax.random.split(key, 5)
     
-    # SimBa architecture hyperparameters. The official SimBa release uses an
-    # asymmetric actor/critic (configs/agent/sac_simba.yaml): actor 128 wide with
-    # 1 residual block, critic 512 wide with 2 blocks. The expansion factor is
-    # shared and defaults to 4, matching the hardcoded 4x inverted bottleneck of
-    # the official ResidualBlock. Bound once with partial so that training and
-    # evaluation build identical parameter trees.
     expansion_factor = config.get("SIMBA_EXPANSION_FACTOR", 4)
     actor_kwargs = dict(
         hidden_dim=config.get("SIMBA_ACTOR_HIDDEN_DIM", 128),
@@ -372,13 +299,6 @@ def single_run(config: dict):
             sample=jax.jit(replay_buffer.sample),
             can_sample=jax.jit(replay_buffer.can_sample),
     )
-    # Split off a dedicated reset key. The reference consumes `key` twice -- here
-    # and again as the training rng in sac_carry below -- and jax.random.split is
-    # deterministic in the key, so jax.random.split(key, num_envs)[0] is
-    # byte-identical to jax.random.split(key, 3)[0], the first key the rollout
-    # derives. That makes env 0's reset randomness the same draw as the first
-    # action-selection key. This is the only inherited behaviour we deliberately
-    # change; pqn.py and dqn.py in this repo already split here.
     key, reset_key = jax.random.split(key)
     _obs, _state = vmap_reset(jax.random.split(reset_key, num_envs))
     _obs, _state, _reward, _done, _info = vmap_step(_state, jnp.zeros((num_envs,), dtype=jnp.int32))
@@ -475,7 +395,6 @@ def single_run(config: dict):
             new_actor_state = u_actor_state.apply_gradients(grads=actor_grads)
             
         
-
             if config.get("AUTOTUNE", True):
                 def alpha_loss_fn(log_alpha):
                     action_probs_detached = jax.lax.stop_gradient(action_probs)
@@ -486,12 +405,6 @@ def single_run(config: dict):
                 updates, a_opt_state = a_optimizer.update(alpha_grad, a_opt_state, log_alpha)
                 log_alpha = optax.apply_updates(log_alpha, updates)
 
-            # Read-only diagnostics. Computed from tensors that already exist, so
-            # they add no PRNG draws, no extra network evaluations and no change to
-            # the update itself. Both describe the state BEFORE this gradient step:
-            # action_probs/log_pi come from the pre-update actor and qf{1,2}_pred
-            # from the pre-update critics, so they pair with the losses reported
-            # alongside them.
             policy_entropy = -jnp.sum(action_probs * log_pi, axis=-1).mean()
             q_abs_max = jnp.maximum(jnp.max(jnp.abs(qf1_pred)), jnp.max(jnp.abs(qf2_pred)))
 
@@ -590,7 +503,6 @@ def single_run(config: dict):
                 print(f"Video (eval) logged to wandb with {frames.shape[0]} frames ({mod_label}).")
         return metrics
 
-    # Entropy target context: max achievable entropy for a uniform policy is log(A).
     print(f"[simba_sac] target_entropy {float(target_entropy):.4f} "
           f"(max {float(jnp.log(action_dim)):.4f} for {action_dim} actions, "
           f"ratio {float(target_entropy / jnp.log(action_dim)):.2f})")

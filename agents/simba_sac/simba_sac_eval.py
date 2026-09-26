@@ -1,14 +1,3 @@
-"""Evaluation for SimBa-SAC.
-
-Identical to agents/sac/sac_eval.py in the reference implementation
-(https://github.com/MertUyar/jaxtari_model_free) -- environment setup, seeding,
-episode handling, chunked lax.scan and metrics are unchanged, and action
-selection remains deterministic argmax over the actor's action probabilities
-with no exploration noise. The only difference is which classes the caller
-passes in as `Model`; simba_sac.py passes functools.partial wrappers of the
-SimBa actor/critic with their architecture hyperparameters already bound, so
-`Actor(action_dim=...)` below rebuilds the training network exactly.
-"""
 from typing import Callable, Tuple
 
 import flax
